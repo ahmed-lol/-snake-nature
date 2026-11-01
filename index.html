@@ -1,0 +1,318 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#10251b">
+<title>Snake Nature</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#10251b;color:white;
+ font-family:Arial,sans-serif;
+ min-height:100vh;display:flex;justify-content:center;
+}
+#app{width:100%;max-width:520px;padding:15px;display:flex;flex-direction:column;gap:13px}
+header,.panel{background:#172d23;border:1px solid #35513d;border-radius:17px;padding:13px}
+header{display:flex;justify-content:space-between;align-items:center}
+h1{font-size:21px;margin:0;color:#a8f0a7}
+small{color:#b7c8b8}
+.stats{display:flex;gap:20px;text-align:center}
+.stats strong{font-size:23px;display:block}
+button,select{border:1px solid #45664b;background:#294534;color:white;border-radius:12px;padding:11px;font-size:15px}
+button:active{transform:scale(.94)}
+#gamebox{
+ width:100%;aspect-ratio:1;position:relative;
+ border-radius:17px;overflow:hidden;
+ border:2px solid #668b60;background:#25472c;
+ box-shadow:0 8px 28px #0008;
+}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+#message{
+ position:absolute;inset:0;display:flex;align-items:center;
+ justify-content:center;flex-direction:column;
+ background:#06150caa;text-align:center;gap:12px;
+}
+#message h2{font-size:30px;margin:0}
+#message p{color:#d6e9d4}
+#controls{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;max-width:240px;margin:auto}
+#controls button{font-size:24px;height:55px}
+.options{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.options button{flex:1}
+footer{text-align:center;color:#b7c8b8;font-size:12px}
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+ <div><h1>🐍 Snake Nature</h1><small>Nature Edition</small></div>
+ <button id="sound">🔊 الصوت</button>
+</header>
+
+<div class="panel stats">
+ <div><small>النقاط</small><strong id="score">0</strong></div>
+ <div><small>أفضل نتيجة</small><strong id="best">0</strong></div>
+ <div><small>المستوى</small><strong id="level">1</strong></div>
+</div>
+
+<div id="gamebox">
+ <canvas id="canvas" width="600" height="600"></canvas>
+ <div id="message">
+  <h2>🍃 Snake Nature</h2>
+  <p>اجمع التفاح واكتشف الغابة!</p>
+  <button id="start" style="background:#55a85e;font-weight:bold;padding:14px 30px">ابدأ اللعب ▶</button>
+ </div>
+</div>
+
+<div class="panel">
+ <div id="controls">
+  <div></div><button data-dir="up">▲</button><div></div>
+  <button data-dir="left">◀</button>
+  <button data-dir="down">▼</button>
+  <button data-dir="right">▶</button>
+ </div>
+</div>
+
+<div class="options">
+ <button id="pause">⏸ إيقاف</button>
+ <button id="vibrate">📳 الاهتزاز: تشغيل</button>
+ <select id="speed">
+  <option value="145">سرعة عادية</option>
+  <option value="105">سرعة سريعة</option>
+  <option value="190">سرعة بطيئة</option>
+ </select>
+</div>
+<footer>Snake Nature • لعبة الثعبان الكلاسيكية</footer>
+</div>
+
+<script>
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+const SIZE=600,N=20,C=30;
+
+let snake,previous,food,dir,next,score=0;
+let state='ready',speed=145,acc=0,last=0;
+let soundOn=true,vibrationOn=true;
+let best=0;
+try{best=Number(localStorage.getItem('snakeBest'))||0}catch(e){}
+$('best').textContent=best;
+
+const forest=new Image();
+forest.crossOrigin='anonymous';
+forest.src='https://images.unsplash.com/photo-1448375240586-882707db888b?w=1000&auto=format&fit=crop&q=80';
+
+let backgroundReady=false;
+forest.onload=()=>{backgroundReady=true;draw(1)};
+
+function audio(type){
+ if(!soundOn)return;
+ try{
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!window.audioCtx)window.audioCtx=new AC();
+  const a=window.audioCtx;
+  if(a.state==='suspended')a.resume();
+  const o=a.createOscillator(),g=a.createGain();
+  o.connect(g);g.connect(a.destination);
+  let freq=type==='eat'?650:type==='crash'?130:350;
+  o.type='sine';
+  o.frequency.setValueAtTime(freq,a.currentTime);
+  if(type==='eat')o.frequency.exponentialRampToValueAtTime(950,a.currentTime+.09);
+  if(type==='crash')o.frequency.exponentialRampToValueAtTime(55,a.currentTime+.3);
+  g.gain.setValueAtTime(.12,a.currentTime);
+  g.gain.exponentialRampToValueAtTime(.001,a.currentTime+(type==='crash'?.35:.12));
+  o.start();o.stop(a.currentTime+.4);
+ }catch(e){}
+}
+function vibrate(ms){
+ if(vibrationOn&&navigator.vibrate)navigator.vibrate(ms);
+}
+function placeFood(){
+ let p;
+ do{
+ p={x:Math.floor(Math.random()*N),y:Math.floor(Math.random()*N)}
+ }while(snake.some(s=>s.x===p.x&&s.y===p.y));
+ return p;
+}
+function reset(){
+ snake=[{x:9,y:10},{x:8,y:10},{x:7,y:10}];
+ previous=snake.map(p=>({...p}));
+ dir={x:1,y:0};next={...dir};
+ score=0;acc=0;food=placeFood();
+ state='ready';
+ update();
+ draw(1);
+}
+function update(){
+ $('score').textContent=score;
+ $('level').textContent=1+Math.floor(score/100);
+}
+function apple(x,y){
+ let cx=x*C+C/2,cy=y*C+C/2;
+ ctx.save();
+ ctx.shadowColor='#ff2b16';ctx.shadowBlur=22;
+ let grad=ctx.createRadialGradient(cx-5,cy-7,2,cx,cy,14);
+ grad.addColorStop(0,'#ffaaa0');
+ grad.addColorStop(.4,'#ff3025');
+ grad.addColorStop(1,'#9b100b');
+ ctx.fillStyle=grad;
+ ctx.beginPath();ctx.ellipse(cx-5,cy,10,12,-.3,0,Math.PI*2);ctx.fill();
+ ctx.beginPath();ctx.ellipse(cx+5,cy,10,12,.3,0,Math.PI*2);ctx.fill();
+ ctx.shadowBlur=0;
+ ctx.strokeStyle='#76502a';ctx.lineWidth=3;
+ ctx.beginPath();ctx.moveTo(cx,cy-10);ctx.lineTo(cx+1,cy-19);ctx.stroke();
+ ctx.fillStyle='#70e65d';
+ ctx.beginPath();ctx.ellipse(cx+7,cy-16,8,4,-.5,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle='#ffffff99';
+ ctx.beginPath();ctx.ellipse(cx-8,cy-5,3,5,-.5,0,Math.PI*2);ctx.fill();
+ ctx.restore();
+}
+function draw(t){
+ ctx.clearRect(0,0,SIZE,SIZE);
+ if(backgroundReady){
+  ctx.drawImage(forest,0,0,SIZE,SIZE);
+  ctx.fillStyle='#08200b55';ctx.fillRect(0,0,SIZE,SIZE);
+ }else{
+  let g=ctx.createLinearGradient(0,0,600,600);
+  g.addColorStop(0,'#315c37');g.addColorStop(1,'#132e20');
+  ctx.fillStyle=g;ctx.fillRect(0,0,SIZE,SIZE);
+ }
+ // Grass details
+ for(let i=0;i<90;i++){
+  let x=(i*83+31)%600,y=(i*137+47)%600;
+  ctx.fillStyle=i%2?'#b5d97a22':'#b7ef9b19';
+  ctx.beginPath();ctx.ellipse(x,y,2,5,-.5,0,7);ctx.fill();
+ }
+ apple(food.x,food.y);
+ for(let i=snake.length-1;i>=0;i--){
+  const p=snake[i],old=previous[i]||p;
+  let x=(old.x+(p.x-old.x)*t)*C+C/2;
+  let y=(old.y+(p.y-old.y)*t)*C+C/2;
+  ctx.save();
+  ctx.shadowColor='#83ff83';ctx.shadowBlur=i===0?14:5;
+  let grad=ctx.createLinearGradient(x-12,y-12,x+12,y+12);
+  grad.addColorStop(0,i===0?'#c8ffad':'#7fe58a');
+  grad.addColorStop(1,i===0?'#269c48':'#25894b');
+  ctx.fillStyle=grad;
+  ctx.beginPath();ctx.roundRect(x-13,y-13,26,26,10);ctx.fill();
+  ctx.restore();
+  if(i===0){
+   let ex=x+dir.x*5-dir.y*6,ey=y+dir.y*5+dir.x*6;
+   let ex2=x+dir.x*5+dir.y*6,ey2=y+dir.y*5-dir.x*6;
+   ctx.fillStyle='white';
+   for(let [a,b] of [[ex,ey],[ex2,ey2]]){
+    ctx.beginPath();ctx.arc(a,b,4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#10251b';
+    ctx.beginPath();ctx.arc(a+dir.x,b+dir.y,2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='white';
+   }
+  }
+ }
+}
+function step(){
+ previous=snake.map(p=>({...p}));
+ dir={...next};
+ const h={x:snake[0].x+dir.x,y:snake[0].y+dir.y};
+ if(h.x<0||h.x>=N||h.y<0||h.y>=N||
+ snake.some((p,i)=>i<snake.length-1&&p.x===h.x&&p.y===h.y)){
+  state='dead';audio('crash');vibrate([100,70,180]);
+  $('message').style.display='flex';
+  $('message').querySelector('h2').textContent='انتهت اللعبة!';
+  $('message').querySelector('p').textContent='نتيجتك: '+score;
+  $('start').textContent='إعادة اللعب ↻';
+  return;
+ }
+ snake.unshift(h);
+ if(h.x===food.x&&h.y===food.y){
+  score+=10;audio('eat');vibrate(35);
+  food=placeFood();update();
+  if(score>best){
+   best=score;$('best').textContent=best;
+   try{localStorage.setItem('snakeBest',best)}catch(e){}
+  }
+ }else snake.pop();
+}
+function frame(now){
+ if(!canvas.isConnected)return;
+ if(!last)last=now;
+ let delta=Math.min(now-last,100);last=now;
+ if(state==='running'){
+  acc+=delta;
+  while(acc>=speed){
+   step();acc-=speed;
+   if(state!=='running')break;
+  }
+  draw(Math.min(acc/speed,1));
+ }else draw(1);
+ requestAnimationFrame(frame);
+}
+function start(){
+ if(state==='dead')reset();
+ state='running';last=0;
+ $('message').style.display='none';
+}
+function turn(d){
+ if(state!=='running')return;
+ if(d.x!==-dir.x||d.y!==-dir.y){
+  next=d;audio('tap');
+ }
+}
+const directions={
+ up:{x:0,y:-1},down:{x:0,y:1},
+ left:{x:-1,y:0},right:{x:1,y:0}
+};
+$('start').onclick=start;
+$('pause').onclick=()=>{
+ if(state==='running'){
+  state='paused';
+  $('pause').textContent='▶ متابعة';
+  $('message').style.display='flex';
+  $('message').querySelector('h2').textContent='متوقف مؤقتاً';
+  $('message').querySelector('p').textContent='خذ وقتك!';
+  $('start').textContent='متابعة';
+  $('start').onclick=()=>{
+   state='running';last=0;
+   $('message').style.display='none';
+   $('start').onclick=start;
+  };
+ }
+};
+$('speed').onchange=e=>{speed=Number(e.target.value);audio('tap')};
+$('sound').onclick=()=>{
+ soundOn=!soundOn;
+ $('sound').textContent=soundOn?'🔊 الصوت':'🔇 الصوت';
+ audio('tap');
+};
+$('vibrate').onclick=()=>{
+ vibrationOn=!vibrationOn;
+ $('vibrate').textContent=vibrationOn?'📳 الاهتزاز: تشغيل':'📴 الاهتزاز: إيقاف';
+ vibrate(30);
+};
+document.querySelectorAll('[data-dir]').forEach(b=>{
+ b.onclick=()=>turn(directions[b.dataset.dir]);
+});
+document.addEventListener('keydown',e=>{
+ const map={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right'};
+ if(map[e.key]){
+  e.preventDefault();turn(directions[map[e.key]]);
+ }
+});
+let sx=0,sy=0;
+canvas.addEventListener('touchstart',e=>{
+ sx=e.touches[0].clientX;sy=e.touches[0].clientY;
+},{passive:true});
+canvas.addEventListener('touchend',e=>{
+ let dx=e.changedTouches[0].clientX-sx;
+ let dy=e.changedTouches[0].clientY-sy;
+ if(Math.max(Math.abs(dx),Math.abs(dy))<18)return;
+ turn(Math.abs(dx)>Math.abs(dy)?
+ {x:Math.sign(dx),y:0}:{x:0,y:Math.sign(dy)});
+},{passive:true});
+
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+  </html>
+  
